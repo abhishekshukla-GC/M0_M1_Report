@@ -30,17 +30,8 @@ from typing import Dict, List
 from pptx import Presentation
 warnings.filterwarnings('ignore')
 
-# Load configuration with error handling
-try:
-    df = fetchcms("""
-        SELECT *
-          FROM dag_job_main_config
-         WHERE job_name='QCOMM_MODULE_ONDEMAND_JOB'
-    """)
-except Exception as e:
-    # Error will be shown when app runs if needed
-    print(f"Warning: Failed to load configuration from database: {e}")
-    df = pd.DataFrame()  # Empty DataFrame as fallback
+# Note: Removed import-time database query to improve startup performance
+# If needed, load configuration data lazily when required
 
 def extract_build_flags(cfg_obj,
                         default_platforms=('blinkit','instamart','zepto')):
@@ -4106,7 +4097,7 @@ def df_to_mapping(df: pd.DataFrame) -> Dict[str, str]:
     row = df.iloc[0].to_dict()
     return {str(k): ("" if pd.isna(v) else str(v)) for k, v in row.items()}
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=True, ttl=3600)  # Cache for 1 hour, show spinner
 def load_config_df() -> pd.DataFrame:
     try:
         a = fetch_query_results(
@@ -4168,6 +4159,7 @@ with st.sidebar:
     leave_missing = st.checkbox("Leave missing placeholders as-is", value=False)
 
 
+# Load configuration (cached, spinner shown by cache decorator)
 cfg = load_config_df()
 
 # Option pickers
@@ -4259,31 +4251,39 @@ if run:
 
         for i, (_, acc_row) in enumerate(work_cfg.iterrows(), start=1):
             db = acc_row["db_name"]
-            status.write(f"Building insights for **{db}** (3 minutes per db)…")
+            status.write(f"🔄 Processing **{db}** ({i}/{total}) - This may take 2-3 minutes…")
 
             try:
-                fulldf = build_insights_df(acc_row, l1_start, l1_end, l2_start, l2_end)
-                mapping = df_to_mapping(fulldf)
+                # Show progress for data building
+                with st.spinner(f"Building insights for {db}..."):
+                    fulldf = build_insights_df(acc_row, l1_start, l1_end, l2_start, l2_end)
+                    mapping = df_to_mapping(fulldf)
 
                 # Fill PPTX
-                filled_pptx_path = td_path / f"{db}_MTD_{l1_start}_{l1_end}.pptx"
-                replace_placeholders_in_pptx(str(template_path), str(filled_pptx_path), mapping, leave_missing=leave_missing)
-                pptx_bytes = filled_pptx_path.read_bytes()
+                with st.spinner(f"Generating presentation for {db}..."):
+                    filled_pptx_path = td_path / f"{db}_MTD_{l1_start}_{l1_end}.pptx"
+                    replace_placeholders_in_pptx(str(template_path), str(filled_pptx_path), mapping, leave_missing=leave_missing)
+                    pptx_bytes = filled_pptx_path.read_bytes()
 
                 if output_kind == "PDF":
                     try:
-                        pdf_bytes = pptx_to_pdf(pptx_bytes)
+                        with st.spinner(f"Converting {db} to PDF..."):
+                            pdf_bytes = pptx_to_pdf(pptx_bytes)
                         outputs.append((f"{db}_MTD_{l1_start}_{l1_end}.pdf", pdf_bytes))
+                        status.write(f"✅ Completed **{db}** - PDF ready")
                     except Exception as ex:
-                        st.warning(f"PDF export failed for {db} (will provide PPTX instead): {ex}")
+                        st.warning(f"⚠️ PDF export failed for {db} (will provide PPTX instead): {ex}")
                         outputs.append((f"{db}_MTD_{l1_start}_{l1_end}.pptx", pptx_bytes))
+                        status.write(f"✅ Completed **{db}** - PPTX ready")
                 else:
                     outputs.append((f"{db}_MTD_{l1_start}_{l1_end}.pptx", pptx_bytes))
+                    status.write(f"✅ Completed **{db}** - PPTX ready")
 
             except Exception as e:
-                st.error(f"Error for {db}: {e}")
+                st.error(f"❌ Error processing {db}: {e}")
+                status.write(f"❌ Failed to process **{db}**")
 
-            progress.progress(i / max(total, 1), text=f"Processed {i}/{total}")
+            progress.progress(i / max(total, 1), text=f"Processed {i}/{total} databases")
 
         status.write("Preparing downloads…")
 

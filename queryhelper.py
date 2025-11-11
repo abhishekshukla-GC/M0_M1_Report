@@ -149,24 +149,38 @@ def load_encrypted_env():
             decrypted_data = decrypt_file(env_encrypted, key)
             if decrypted_data:
                 # Parse the decrypted .env content and set environment variables
-                env_content = decrypted_data.decode('utf-8')
-                for line in env_content.splitlines():
-                    line = line.strip()
-                    # Skip comments and empty lines
-                    if not line or line.startswith('#'):
-                        continue
-                    # Parse KEY=VALUE format
-                    if '=' in line:
-                        key_part, value_part = line.split('=', 1)
-                        key_part = key_part.strip()
-                        value_part = value_part.strip()
-                        # Remove quotes if present
-                        if value_part.startswith('"') and value_part.endswith('"'):
-                            value_part = value_part[1:-1]
-                        elif value_part.startswith("'") and value_part.endswith("'"):
-                            value_part = value_part[1:-1]
-                        # Set environment variable
-                        os.environ[key_part] = value_part
+                # Write to temporary file and use load_dotenv for better performance
+                import tempfile
+                temp_env = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env')
+                try:
+                    env_content = decrypted_data.decode('utf-8')
+                    temp_env.write(env_content)
+                    temp_env.close()
+                    # Use load_dotenv which is optimized for parsing .env files
+                    load_dotenv(temp_env.name, override=True)
+                    # Clean up temp file
+                    os.unlink(temp_env.name)
+                except Exception as cleanup_error:
+                    # Try to clean up even if there's an error
+                    try:
+                        os.unlink(temp_env.name)
+                    except:
+                        pass
+                    # Fallback to manual parsing if load_dotenv fails
+                    env_content = decrypted_data.decode('utf-8')
+                    for line in env_content.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        if '=' in line:
+                            key_part, value_part = line.split('=', 1)
+                            key_part = key_part.strip()
+                            value_part = value_part.strip()
+                            if value_part.startswith('"') and value_part.endswith('"'):
+                                value_part = value_part[1:-1]
+                            elif value_part.startswith("'") and value_part.endswith("'"):
+                                value_part = value_part[1:-1]
+                            os.environ[key_part] = value_part
                 return
         except Exception as e:
             # Don't use st.error here as Streamlit may not be initialized at import time
@@ -393,7 +407,13 @@ def fetch_query_results(query):
         if not db_url:
             print("Warning: fetch_query_url not configured")
             return pd.DataFrame()
-        engine = create_engine(db_url)
+        # Add connection timeout and pool settings for better performance
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,  # Verify connections before using
+            pool_recycle=3600,   # Recycle connections after 1 hour
+            connect_args={"connect_timeout": 10}  # 10 second connection timeout
+        )
         df = pd.read_sql_query(query, engine)
         return df if df is not None else pd.DataFrame()
     except Exception as e:
@@ -418,7 +438,13 @@ def fetch_catalog_results(query):
         if not db_url:
             print("Warning: catalog_url not configured")
             return pd.DataFrame()
-        engine = create_engine(db_url)
+        # Add connection timeout and pool settings for better performance
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            connect_args={"connect_timeout": 10}
+        )
         df = pd.read_sql_query(query, engine)
         return df if df is not None else pd.DataFrame()
     except Exception as e:
@@ -443,7 +469,13 @@ def fetchcms(query):
         if not db_url:
             print("Warning: cms_url not configured")
             return pd.DataFrame()
-        engine = create_engine(db_url)
+        # Add connection timeout and pool settings for better performance
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            connect_args={"connect_timeout": 10}
+        )
         df = pd.read_sql_query(query, engine)
         return df if df is not None else pd.DataFrame()
     except Exception as e:
