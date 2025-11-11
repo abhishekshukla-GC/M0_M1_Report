@@ -126,7 +126,59 @@ def get_env_var(key: str, default: str = None) -> str:
     
     return os.getenv(key, default)
 
-load_dotenv()
+def load_encrypted_env():
+    """Decrypt and load .env.encrypted file if it exists."""
+    env_encrypted = Path(".env.encrypted")
+    env_plain = Path(".env")
+    
+    # If plain .env exists, use it (for local dev)
+    if env_plain.exists():
+        load_dotenv(env_plain)
+        return
+    
+    # If encrypted .env exists, decrypt and load it
+    if env_encrypted.exists():
+        key = get_decryption_key()
+        if not key:
+            # Don't use st.error here as Streamlit may not be initialized at import time
+            print("⚠️ Found .env.encrypted but no decryption key.")
+            print("💡 Add 'encryption_key' to Streamlit Cloud secrets or set ENCRYPTION_KEY environment variable.")
+            return
+        
+        try:
+            decrypted_data = decrypt_file(env_encrypted, key)
+            if decrypted_data:
+                # Parse the decrypted .env content and set environment variables
+                env_content = decrypted_data.decode('utf-8')
+                for line in env_content.splitlines():
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+                    # Parse KEY=VALUE format
+                    if '=' in line:
+                        key_part, value_part = line.split('=', 1)
+                        key_part = key_part.strip()
+                        value_part = value_part.strip()
+                        # Remove quotes if present
+                        if value_part.startswith('"') and value_part.endswith('"'):
+                            value_part = value_part[1:-1]
+                        elif value_part.startswith("'") and value_part.endswith("'"):
+                            value_part = value_part[1:-1]
+                        # Set environment variable
+                        os.environ[key_part] = value_part
+                return
+        except Exception as e:
+            # Don't use st.error here as Streamlit may not be initialized at import time
+            print(f"⚠️ Failed to decrypt .env.encrypted: {e}")
+            print("💡 Verify your encryption_key in Streamlit secrets matches the one used to encrypt the file.")
+    
+    # Fallback: try loading plain .env if it exists
+    if env_plain.exists():
+        load_dotenv(env_plain)
+
+# Load environment variables (from encrypted or plain .env)
+load_encrypted_env()
 
 def sfFetch(query): 
     df=pd.DataFrame()
