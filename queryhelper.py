@@ -338,11 +338,15 @@ def fetch_query_results(query):
     db_url = get_env_var('fetch_query_url') or os.getenv('fetch_query_url')
 
     try:
+        if not db_url:
+            print("Warning: fetch_query_url not configured")
+            return pd.DataFrame()
         engine = create_engine(db_url)
         df = pd.read_sql_query(query, engine)
-        return df
+        return df if df is not None else pd.DataFrame()
     except Exception as e:
         print(f"An error occurred: {e}")
+        return pd.DataFrame()
 
 
 def fetch_catalog_results(query):
@@ -359,11 +363,15 @@ def fetch_catalog_results(query):
     db_url = get_env_var('catalog_url') or os.getenv('catalog_url')
 
     try:
+        if not db_url:
+            print("Warning: catalog_url not configured")
+            return pd.DataFrame()
         engine = create_engine(db_url)
         df = pd.read_sql_query(query, engine)
-        return df
+        return df if df is not None else pd.DataFrame()
     except Exception as e:
         print(f"An error occurred: {e}")
+        return pd.DataFrame()
 
 def fetchcms(query):
     """
@@ -380,11 +388,15 @@ def fetchcms(query):
     db_url = get_env_var('cms_url') or os.getenv('cms_url')
 
     try:
+        if not db_url:
+            print("Warning: cms_url not configured")
+            return pd.DataFrame()
         engine = create_engine(db_url)
         df = pd.read_sql_query(query, engine)
-        return df
+        return df if df is not None else pd.DataFrame()
     except Exception as e:
         print(f"An error occurred: {e}")
+        return pd.DataFrame()
 
 
 

@@ -4115,7 +4115,8 @@ def load_config_df() -> pd.DataFrame:
             FROM accounts
             """
         )
-        if a.empty:
+        # Check if None or empty
+        if a is None or a.empty:
             st.warning("⚠️ No accounts found in database. Check your database connection.")
             return pd.DataFrame()
         
@@ -4128,7 +4129,8 @@ def load_config_df() -> pd.DataFrame:
             WHERE config_type = 'onboarding'
             """
         )
-        if cfg.empty:
+        # Check if None or empty
+        if cfg is None or cfg.empty:
             st.warning("⚠️ No configurations found in database.")
             return pd.DataFrame()
         
@@ -4178,6 +4180,13 @@ with col1:
     if "sel_dbs" not in st.session_state:
         st.session_state.sel_dbs = []
 
+    # Check if config is loaded successfully
+    if cfg.empty or "domain" not in cfg.columns:
+        st.error("⚠️ Configuration not loaded. Please check your database connection.")
+        st.info("💡 Ensure 'fetch_query_url' is set in Streamlit secrets or your encrypted .env file.")
+        st.info("💡 Also ensure 'cms_url' is set for initial configuration loading.")
+        st.stop()
+    
     all_domains = sorted([d for d in cfg["domain"].dropna().unique().tolist() if d])
     sel_domains = st.multiselect("Domain(s)", options=all_domains, default=[], key="sel_domains")
 
