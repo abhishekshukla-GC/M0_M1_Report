@@ -4103,9 +4103,10 @@ def load_config_df() -> pd.DataFrame:
         # Check if database URL is configured
         db_url = os.getenv('fetch_query_url')
         if not db_url:
-            # Don't show error here, let diagnostics handle it
+            print("⚠️ fetch_query_url not found in environment variables")
             return pd.DataFrame()
         
+        print(f"🔍 Attempting to connect to database...")
         a = fetch_query_results(
             """
             SELECT id account_id, primary_email_domain
@@ -4114,9 +4115,10 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if a is None or a.empty:
-            # Don't show warning here, let diagnostics handle it
+            print("⚠️ Query returned no accounts - database may be empty or query failed")
             return pd.DataFrame()
         
+        print(f"✅ Found {len(a)} account(s)")
         a["domain"] = a["primary_email_domain"].str.split(".").str[0]
 
         cfg = fetch_query_results(
@@ -4128,17 +4130,20 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if cfg is None or cfg.empty:
-            # Don't show warning here, let diagnostics handle it
+            print("⚠️ Query returned no configurations - database may be empty or query failed")
             return pd.DataFrame()
         
+        print(f"✅ Found {len(cfg)} configuration(s)")
         cfg = cfg.merge(a, on="account_id", how="left")
         cfg['build_blinkit']=True
         cfg['build_instamart']=True
         cfg['build_zepto']=True
+        print(f"✅ Successfully loaded {len(cfg)} configuration(s)")
         return cfg
     except Exception as e:
-        # Don't show error here, let diagnostics handle it
-        print(f"Configuration load error: {e}")
+        print(f"❌ Configuration load error: {e}")
+        import traceback
+        traceback.print_exc()
         return pd.DataFrame()
 
 
@@ -4181,17 +4186,29 @@ if cfg.empty or "domain" not in cfg.columns:
         
         with col_diag1:
             st.write("**File Status:**")
-            st.write(f"- `.env.encrypted` exists: {'✅' if env_encrypted.exists() else '❌'}")
-            st.write(f"- `.env` exists: {'✅' if env_plain.exists() else '❌'}")
+            st.write(f"- `.env.encrypted` exists: {'✅' if env_encrypted.exists() else '❌ (Required!)'}")
+            st.write(f"- `.env` exists: {'✅' if env_plain.exists() else '⚠️ (Expected - not in repo)'}")
+            st.caption("Note: `.env` not existing is normal - we use `.env.encrypted` instead")
             
             # Check encryption key
             has_key = False
+            key_value = None
             try:
-                key = st.secrets.get("encryption_key", None)
-                has_key = key is not None and len(str(key)) > 0
+                key_value = st.secrets.get("encryption_key", None)
+                has_key = key_value is not None and len(str(key_value)) > 0
             except (AttributeError, FileNotFoundError, KeyError):
                 pass
-            st.write(f"- `encryption_key` in secrets: {'✅' if has_key else '❌'}")
+            st.write(f"- `encryption_key` in secrets: {'✅' if has_key else '❌ (Required!)'}")
+            
+            # Check if decryption worked by checking if env vars are loaded
+            if env_encrypted.exists() and has_key:
+                # Try to verify decryption worked
+                test_vars = ['fetch_query_url', 'cms_url', 'SNOWFLAKE_ACCOUNT']
+                loaded_count = sum(1 for var in test_vars if os.getenv(var))
+                st.write(f"- Environment variables loaded: {loaded_count}/{len(test_vars)}")
+                if loaded_count == 0:
+                    st.error("⚠️ Decryption may have failed - no environment variables found!")
+                    st.caption("Check encryption key matches the one used to encrypt")
         
         with col_diag2:
             st.write("**Database URLs:**")
@@ -4217,11 +4234,33 @@ if cfg.empty or "domain" not in cfg.columns:
             urls_set = sum(1 for url in [fetch_url, cms_url, catalog_url] if url and url != 'Not set')
             st.write(f"\n**Summary:** {urls_set}/3 database URLs configured")
         
+        # Test database connection
+        st.subheader("Database Connection Test")
+        test_button = st.button("🔍 Test Database Connection", type="primary")
+        
+        if test_button:
+            test_status = st.empty()
+            test_status.info("Testing connection...")
+            
+            # Test fetch_query_url
+            try:
+                from queryhelper import fetch_query_results
+                test_result = fetch_query_results("SELECT 1 as test")
+                if not test_result.empty:
+                    test_status.success("✅ `fetch_query_url` connection successful!")
+                else:
+                    test_status.warning("⚠️ Connection succeeded but query returned no results")
+            except Exception as e:
+                test_status.error(f"❌ `fetch_query_url` connection failed: {str(e)}")
+                st.exception(e)
+        
         st.info("💡 **Troubleshooting:**\n"
                 "1. Ensure `.env.encrypted` is in your repository\n"
                 "2. Add `encryption_key` to Streamlit Cloud secrets (Settings → Secrets)\n"
                 "3. Verify the encryption key matches the one used to encrypt the file\n"
-                "4. Check that your `.env` file contains `fetch_query_url` and `cms_url` before encryption")
+                "4. Check that your `.env` file contains `fetch_query_url` and `cms_url` before encryption\n"
+                "5. Click 'Test Database Connection' above to verify the connection works\n"
+                "6. Ensure your database allows connections from Streamlit Cloud IPs")
 
 # Option pickers
 col1, col2, col3 = st.columns([1.2, 1, 1])
