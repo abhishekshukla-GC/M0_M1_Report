@@ -15,15 +15,24 @@ except ImportError:
     st = None
 
 def get_decryption_key():
-    """Get decryption key from Streamlit secrets or environment variable."""
+    """Get decryption key from Streamlit secrets or environment variable.
+    Only tries Streamlit secrets if Streamlit is available and initialized."""
+    # For local dev, prefer environment variable (faster)
+    env_key = os.getenv("ENCRYPTION_KEY")
+    if env_key:
+        return env_key
+    
+    # Only try Streamlit secrets if available (may be slow if not initialized)
     if STREAMLIT_AVAILABLE:
         try:
-            return st.secrets.get("encryption_key", None)
-        except (AttributeError, FileNotFoundError, KeyError):
+            # Check if Streamlit is initialized (has session state)
+            if hasattr(st, 'session_state'):
+                return st.secrets.get("encryption_key", None)
+        except (AttributeError, FileNotFoundError, KeyError, RuntimeError):
+            # Streamlit not initialized yet, skip
             pass
     
-    # Fall back to environment variable
-    return os.getenv("ENCRYPTION_KEY")
+    return None
 
 def decrypt_file(encrypted_path: Path, key: str) -> bytes:
     """Decrypt a file using Fernet encryption."""
@@ -127,13 +136,14 @@ def get_env_var(key: str, default: str = None) -> str:
     return os.getenv(key, default)
 
 def load_encrypted_env():
-    """Decrypt and load .env.encrypted file if it exists."""
+    """Decrypt and load .env.encrypted file if it exists.
+    For local development, prefer plain .env file for faster startup."""
     env_encrypted = Path(".env.encrypted")
     env_plain = Path(".env")
     
-    # If plain .env exists, use it (for local dev)
+    # If plain .env exists, use it (for local dev - fastest path)
     if env_plain.exists():
-        load_dotenv(env_plain)
+        load_dotenv(env_plain, override=False)  # Don't override if already set
         return
     
     # If encrypted .env exists, decrypt and load it
@@ -205,7 +215,15 @@ def load_encrypted_env():
         load_dotenv(env_plain)
 
 # Load environment variables (from encrypted or plain .env)
-load_encrypted_env()
+# For local dev: prefer plain .env (fastest), only use encryption if needed
+env_plain = Path(".env")
+if env_plain.exists():
+    # Fast path: just load plain .env (local development)
+    load_dotenv(env_plain, override=False)
+else:
+    # Only try encryption if plain .env doesn't exist (cloud deployment)
+    if not os.getenv('fetch_query_url') and not os.getenv('SNOWFLAKE_ACCOUNT'):
+        load_encrypted_env()
 
 def sfFetch(query): 
     df=pd.DataFrame()
