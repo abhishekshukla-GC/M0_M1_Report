@@ -4245,11 +4245,52 @@ if cfg.empty or "domain" not in cfg.columns:
             # Test fetch_query_url
             try:
                 from queryhelper import fetch_query_results
+                
+                # Test 1: Basic connection
                 test_result = fetch_query_results("SELECT 1 as test")
-                if not test_result.empty:
-                    test_status.success("✅ `fetch_query_url` connection successful!")
+                if test_result.empty:
+                    test_status.warning("⚠️ Connection succeeded but basic query returned no results")
                 else:
-                    test_status.warning("⚠️ Connection succeeded but query returned no results")
+                    test_status.success("✅ Basic connection test passed!")
+                
+                # Test 2: Check if accounts table exists
+                try:
+                    accounts_check = fetch_query_results("""
+                        SELECT COUNT(*) as count 
+                        FROM information_schema.tables 
+                        WHERE table_name = 'accounts'
+                    """)
+                    if not accounts_check.empty and accounts_check.iloc[0]['count'] > 0:
+                        # Table exists, check row count
+                        row_count = fetch_query_results("SELECT COUNT(*) as count FROM accounts")
+                        if not row_count.empty:
+                            count = row_count.iloc[0]['count']
+                            if count > 0:
+                                test_status.success(f"✅ `accounts` table exists with {count} row(s)")
+                            else:
+                                test_status.warning("⚠️ `accounts` table exists but is empty")
+                    else:
+                        test_status.error("❌ `accounts` table does not exist in the database")
+                except Exception as table_error:
+                    test_status.warning(f"⚠️ Could not check accounts table: {str(table_error)}")
+                
+                # Test 3: Try the actual query
+                try:
+                    actual_query = fetch_query_results("""
+                        SELECT id account_id, primary_email_domain
+                        FROM accounts
+                        LIMIT 5
+                    """)
+                    if not actual_query.empty:
+                        test_status.success(f"✅ Query successful! Found {len(actual_query)} account(s)")
+                        with st.expander("View sample data"):
+                            st.dataframe(actual_query)
+                    else:
+                        test_status.warning("⚠️ Query executed but returned no rows (table may be empty)")
+                except Exception as query_error:
+                    test_status.error(f"❌ Query failed: {str(query_error)}")
+                    st.exception(query_error)
+                    
             except Exception as e:
                 test_status.error(f"❌ `fetch_query_url` connection failed: {str(e)}")
                 st.exception(e)
