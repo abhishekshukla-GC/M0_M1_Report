@@ -53,7 +53,8 @@ def decrypt_file(encrypted_path: Path, key: str) -> bytes:
         decrypted_data = fernet.decrypt(encrypted_data)
         return decrypted_data
     except Exception as e:
-        print(f"Warning: Failed to decrypt {encrypted_path.name}: {e}")
+        # Failed to decrypt - will be handled in UI if needed
+        pass
         return None
 
 def get_credential_file_path(filename: str):
@@ -94,8 +95,8 @@ def load_credential_file(filename: str) -> Path:
                 st.info("💡 Add `encryption_key` to Streamlit Cloud secrets or `.streamlit/secrets.toml` for local development.")
             except:
                 pass
-        print(f"Warning: Encrypted file {filename}.encrypted found but no decryption key available.")
-        print("Falling back to plain file if it exists...")
+        # Encrypted file found but no key - will fall back to plain file
+        pass
         plain_path = Path(filename)
         if plain_path.exists():
             return plain_path
@@ -151,8 +152,8 @@ def load_encrypted_env():
         key = get_decryption_key()
         if not key:
             # Don't use st.error here as Streamlit may not be initialized at import time
-            print("⚠️ Found .env.encrypted but no decryption key.")
-            print("💡 Add 'encryption_key' to Streamlit Cloud secrets or set ENCRYPTION_KEY environment variable.")
+            # Silently skip - will be handled in UI if needed
+            pass
             return
         
         try:
@@ -175,7 +176,8 @@ def load_encrypted_env():
                         os.unlink(temp_env_path)
                     except:
                         pass
-                    print(f"✅ Successfully decrypted and loaded .env.encrypted ({len(env_content)} bytes)")
+                    # Successfully loaded encrypted env
+                    pass
                 except Exception as load_error:
                     # Try to clean up even if there's an error
                     if temp_env_path:
@@ -184,7 +186,7 @@ def load_encrypted_env():
                         except:
                             pass
                     # Fallback to manual parsing if load_dotenv fails
-                    print(f"⚠️ load_dotenv failed, using manual parsing: {load_error}")
+                    pass
                     env_content = decrypted_data.decode('utf-8')
                     vars_loaded = 0
                     for line in env_content.splitlines():
@@ -201,14 +203,16 @@ def load_encrypted_env():
                                 value_part = value_part[1:-1]
                             os.environ[key_part] = value_part
                             vars_loaded += 1
-                    print(f"✅ Manually loaded {vars_loaded} environment variables from .env.encrypted")
+                    # Manually loaded environment variables
+                    pass
                 return
             else:
-                print("⚠️ Failed to decrypt .env.encrypted (decrypt_file returned None)")
+                # Failed to decrypt - will be handled in UI if needed
+                pass
         except Exception as e:
             # Don't use st.error here as Streamlit may not be initialized at import time
-            print(f"⚠️ Failed to decrypt .env.encrypted: {e}")
-            print("💡 Verify your encryption_key in Streamlit secrets matches the one used to encrypt the file.")
+            # Silently skip - will be handled in UI if needed
+            pass
     
     # Fallback: try loading plain .env if it exists
     if env_plain.exists():

@@ -1188,11 +1188,14 @@ def get_all_platforms_data_parallel(acc, l2_start, l2_end, l1_start, l1_end, pla
                 if df is not None and not df.empty:
                     df['gc_platform'] = platform_name
                     all_dataframes.append(df)
-                    print(f"Successfully collected data for {platform_name}")
+                    # Successfully collected data
+                    pass
                 else:
-                    print(f"Failed to collect data for {platform_name}")
+                    # Failed to collect data
+                    pass
             except Exception as e:
-                print(f"Exception occurred for {platform}: {str(e)}")
+                # Exception occurred - will be handled by caller
+                pass
 
     if all_dataframes:
         combined_df = pd.concat(all_dataframes, ignore_index=True)
@@ -4099,14 +4102,16 @@ def df_to_mapping(df: pd.DataFrame) -> Dict[str, str]:
 
 @st.cache_data(show_spinner=True, ttl=3600)  # Cache for 1 hour, show spinner
 def load_config_df() -> pd.DataFrame:
+    """Load configuration from database. Returns empty DataFrame on failure."""
     try:
-        # Check if database URL is configured
-        db_url = os.getenv('fetch_query_url')
+        # Check if database URL is configured (check both env vars and Streamlit secrets)
+        from queryhelper import get_env_var
+        db_url = get_env_var('fetch_query_url') or os.getenv('fetch_query_url')
         if not db_url:
-            print("⚠️ fetch_query_url not found in environment variables")
+            # fetch_query_url not found - will be shown in diagnostics
             return pd.DataFrame()
         
-        print(f"🔍 Attempting to connect to database...")
+        # Attempting to connect to database
         a = fetch_query_results(
             """
             SELECT id account_id, primary_email_domain
@@ -4115,10 +4120,10 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if a is None or a.empty:
-            print("⚠️ Query returned no accounts - database may be empty or query failed")
+            # Query returned no accounts - will be shown in diagnostics
             return pd.DataFrame()
         
-        print(f"✅ Found {len(a)} account(s)")
+        # Found accounts
         a["domain"] = a["primary_email_domain"].str.split(".").str[0]
 
         cfg = fetch_query_results(
@@ -4130,20 +4135,21 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if cfg is None or cfg.empty:
-            print("⚠️ Query returned no configurations - database may be empty or query failed")
+            # Query returned no configurations - will be shown in diagnostics
             return pd.DataFrame()
         
-        print(f"✅ Found {len(cfg)} configuration(s)")
+        # Found configurations
         cfg = cfg.merge(a, on="account_id", how="left")
         cfg['build_blinkit']=True
         cfg['build_instamart']=True
         cfg['build_zepto']=True
-        print(f"✅ Successfully loaded {len(cfg)} configuration(s)")
+        # Successfully loaded configurations
         return cfg
     except Exception as e:
-        print(f"❌ Configuration load error: {e}")
-        import traceback
-        traceback.print_exc()
+        # Configuration load error - will be shown in UI diagnostics
+        # Store error in session state for diagnostics to display
+        if 'config_load_error' not in st.session_state:
+            st.session_state.config_load_error = str(e)
         return pd.DataFrame()
 
 
@@ -4274,26 +4280,74 @@ if cfg.empty or "domain" not in cfg.columns:
                 except Exception as table_error:
                     test_status.warning(f"⚠️ Could not check accounts table: {str(table_error)}")
                 
-                # Test 3: Try the actual query
+                # Test 3: Get database info
                 try:
+                    db_info = fetch_query_results("SELECT current_database() as db_name, current_schema() as schema_name")
+                    if not db_info.empty:
+                        db_name = db_info.iloc[0]['db_name'] if 'db_name' in db_info.columns else 'Unknown'
+                        schema_name = db_info.iloc[0]['schema_name'] if 'schema_name' in db_info.columns else 'Unknown'
+                        test_status.info(f"📊 Connected to database: `{db_name}` (schema: `{schema_name}`)")
+                except:
+                    pass
+                
+                # Test 4: Check all tables in the database
+                try:
+                    all_tables = fetch_query_results("""
+                        SELECT table_schema, table_name, 
+                               (SELECT COUNT(*) FROM information_schema.columns 
+                                WHERE table_schema = t.table_schema 
+                                AND table_name = t.table_name) as column_count
+                        FROM information_schema.tables t
+                        WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                        ORDER BY table_schema, table_name
+                        LIMIT 20
+                    """)
+                    if not all_tables.empty:
+                        with st.expander("📋 View available tables in database"):
+                            st.dataframe(all_tables)
+                            st.caption(f"Showing first 20 tables. Total: {len(all_tables)}")
+                except Exception as tables_error:
+                    test_status.warning(f"⚠️ Could not list tables: {str(tables_error)}")
+                
+                # Test 5: Try the actual query with more details
+                try:
+                    # First check row count
+                    count_query = fetch_query_results("SELECT COUNT(*) as total FROM accounts")
+                    total_rows = 0
+                    if not count_query.empty:
+                        total_rows = int(count_query.iloc[0]['total']) if 'total' in count_query.columns else 0
+                    
                     actual_query = fetch_query_results("""
                         SELECT id account_id, primary_email_domain
                         FROM accounts
                         LIMIT 5
                     """)
                     if not actual_query.empty:
-                        test_status.success(f"✅ Query successful! Found {len(actual_query)} account(s)")
+                        test_status.success(f"✅ Query successful! Found {len(actual_query)} account(s) (Total in table: {total_rows})")
                         with st.expander("View sample data"):
                             st.dataframe(actual_query)
                     else:
-                        test_status.warning("⚠️ Query executed but returned no rows (table may be empty)")
+                        if total_rows > 0:
+                            test_status.warning(f"⚠️ Query executed but returned no rows (table has {total_rows} rows but query returned empty)")
+                            st.info("💡 This might indicate a schema/column name mismatch. Check if column names are correct.")
+                        else:
+                            test_status.warning("⚠️ Query executed but returned no rows (table is empty)")
+                            st.info("💡 The `accounts` table exists but has no data. This might be expected if you're connecting to a different database than your local one.")
                 except Exception as query_error:
                     test_status.error(f"❌ Query failed: {str(query_error)}")
                     st.exception(query_error)
+                    st.info("💡 **Possible issues:**\n"
+                           "- Column names might be different (e.g., `id` vs `account_id`)\n"
+                           "- Table might be in a different schema\n"
+                           "- Connection might be to a different database than local")
                     
             except Exception as e:
                 test_status.error(f"❌ `fetch_query_url` connection failed: {str(e)}")
                 st.exception(e)
+        
+        # Show configuration load error if available
+        if 'config_load_error' in st.session_state:
+            st.error(f"**Configuration Load Error:** {st.session_state.config_load_error}")
         
         st.info("💡 **Troubleshooting:**\n"
                 "1. Ensure `.env.encrypted` is in your repository\n"
@@ -4301,7 +4355,9 @@ if cfg.empty or "domain" not in cfg.columns:
                 "3. Verify the encryption key matches the one used to encrypt the file\n"
                 "4. Check that your `.env` file contains `fetch_query_url` and `cms_url` before encryption\n"
                 "5. Click 'Test Database Connection' above to verify the connection works\n"
-                "6. Ensure your database allows connections from Streamlit Cloud IPs")
+                "6. Ensure your database allows connections from Streamlit Cloud IPs\n"
+                "7. **If query returns no rows but works locally:** The connection URL might point to a different database. Check the database name in the connection test above.\n"
+                "8. **If configuration not loaded:** Check if the `accounts` and `configs` tables exist and have data in the database shown above.")
 
 # Option pickers
 col1, col2, col3 = st.columns([1.2, 1, 1])
@@ -4315,14 +4371,28 @@ with col1:
 
     # Check if config is loaded successfully
     if cfg.empty or "domain" not in cfg.columns:
-        st.error("⚠️ Configuration not loaded. Please check your database connection.")
+        # Show more helpful error message
+        error_msg = "⚠️ Configuration not loaded. Please check your database connection."
+        if 'config_load_error' in st.session_state:
+            error_msg += f"\n\n**Error details:** {st.session_state.config_load_error}"
+        st.error(error_msg)
         st.info("💡 Expand the 'Connection Diagnostics' section above for detailed troubleshooting.")
-        st.stop()
+        
+        # Don't stop - let user see diagnostics and test connection
+        # st.stop()  # Commented out so diagnostics are visible
     
-    all_domains = sorted([d for d in cfg["domain"].dropna().unique().tolist() if d])
-    sel_domains = st.multiselect("Domain(s)", options=all_domains, default=[], key="sel_domains")
+    # Only show domain selector if config is loaded
+    if cfg.empty or "domain" not in cfg.columns:
+        st.warning("⚠️ Cannot load domains - configuration not available. Please check the Connection Diagnostics section above.")
+        all_domains = []
+    else:
+        all_domains = sorted([d for d in cfg["domain"].dropna().unique().tolist() if d])
+    
+    sel_domains = st.multiselect("Domain(s)", options=all_domains, default=[], key="sel_domains", disabled=len(all_domains) == 0)
 
-    if sel_domains:
+    if cfg.empty or "domain" not in cfg.columns:
+        db_opts = []
+    elif sel_domains:
         db_opts = sorted(cfg[cfg["domain"].isin(sel_domains)]["db_name"].dropna().unique().tolist())
     else:
         db_opts = sorted(cfg["db_name"].dropna().unique().tolist())

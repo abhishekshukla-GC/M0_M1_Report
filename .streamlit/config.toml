@@ -1,14 +1,15 @@
-[theme]
-primaryColor = "#FF4B4B"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
-font = "sans serif"
+# Theme settings - remove or customize as needed
+# [theme]
+# primaryColor = "#FF4B4B"
+# backgroundColor = "#FFFFFF"
+# secondaryBackgroundColor = "#F0F2F6"
+# textColor = "#262730"
+# font = "sans serif"
 
 [server]
 headless = true
 port = 8501
-enableCORS = false
+# enableCORS and enableXsrfProtection cannot both be set - Streamlit will handle this
 enableXsrfProtection = true
 
 [browser]
