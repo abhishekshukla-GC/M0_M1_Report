@@ -152,22 +152,31 @@ def load_encrypted_env():
                 # Write to temporary file and use load_dotenv for better performance
                 import tempfile
                 temp_env = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env')
+                temp_env_path = None
                 try:
                     env_content = decrypted_data.decode('utf-8')
                     temp_env.write(env_content)
                     temp_env.close()
+                    temp_env_path = temp_env.name
                     # Use load_dotenv which is optimized for parsing .env files
-                    load_dotenv(temp_env.name, override=True)
+                    load_dotenv(temp_env_path, override=True)
                     # Clean up temp file
-                    os.unlink(temp_env.name)
-                except Exception as cleanup_error:
-                    # Try to clean up even if there's an error
                     try:
-                        os.unlink(temp_env.name)
+                        os.unlink(temp_env_path)
                     except:
                         pass
+                    print(f"✅ Successfully decrypted and loaded .env.encrypted ({len(env_content)} bytes)")
+                except Exception as load_error:
+                    # Try to clean up even if there's an error
+                    if temp_env_path:
+                        try:
+                            os.unlink(temp_env_path)
+                        except:
+                            pass
                     # Fallback to manual parsing if load_dotenv fails
+                    print(f"⚠️ load_dotenv failed, using manual parsing: {load_error}")
                     env_content = decrypted_data.decode('utf-8')
+                    vars_loaded = 0
                     for line in env_content.splitlines():
                         line = line.strip()
                         if not line or line.startswith('#'):
@@ -181,7 +190,11 @@ def load_encrypted_env():
                             elif value_part.startswith("'") and value_part.endswith("'"):
                                 value_part = value_part[1:-1]
                             os.environ[key_part] = value_part
+                            vars_loaded += 1
+                    print(f"✅ Manually loaded {vars_loaded} environment variables from .env.encrypted")
                 return
+            else:
+                print("⚠️ Failed to decrypt .env.encrypted (decrypt_file returned None)")
         except Exception as e:
             # Don't use st.error here as Streamlit may not be initialized at import time
             print(f"⚠️ Failed to decrypt .env.encrypted: {e}")

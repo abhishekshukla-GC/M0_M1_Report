@@ -4100,6 +4100,12 @@ def df_to_mapping(df: pd.DataFrame) -> Dict[str, str]:
 @st.cache_data(show_spinner=True, ttl=3600)  # Cache for 1 hour, show spinner
 def load_config_df() -> pd.DataFrame:
     try:
+        # Check if database URL is configured
+        db_url = os.getenv('fetch_query_url')
+        if not db_url:
+            # Don't show error here, let diagnostics handle it
+            return pd.DataFrame()
+        
         a = fetch_query_results(
             """
             SELECT id account_id, primary_email_domain
@@ -4108,7 +4114,7 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if a is None or a.empty:
-            st.warning("⚠️ No accounts found in database. Check your database connection.")
+            # Don't show warning here, let diagnostics handle it
             return pd.DataFrame()
         
         a["domain"] = a["primary_email_domain"].str.split(".").str[0]
@@ -4122,7 +4128,7 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if cfg is None or cfg.empty:
-            st.warning("⚠️ No configurations found in database.")
+            # Don't show warning here, let diagnostics handle it
             return pd.DataFrame()
         
         cfg = cfg.merge(a, on="account_id", how="left")
@@ -4131,9 +4137,8 @@ def load_config_df() -> pd.DataFrame:
         cfg['build_zepto']=True
         return cfg
     except Exception as e:
-        st.error(f"⚠️ Failed to load configuration: {e}")
-        st.info("💡 Please check your database connection settings in Streamlit secrets.")
-        st.info("Required secrets: `fetch_query_url` (PostgreSQL connection string)")
+        # Don't show error here, let diagnostics handle it
+        print(f"Configuration load error: {e}")
         return pd.DataFrame()
 
 
@@ -4162,6 +4167,62 @@ with st.sidebar:
 # Load configuration (cached, spinner shown by cache decorator)
 cfg = load_config_df()
 
+# Diagnostic section (only show if config failed to load)
+if cfg.empty or "domain" not in cfg.columns:
+    with st.expander("🔍 Connection Diagnostics", expanded=True):
+        st.subheader("Environment & Credentials Status")
+        
+        # Check encrypted files
+        from pathlib import Path
+        env_encrypted = Path(".env.encrypted")
+        env_plain = Path(".env")
+        
+        col_diag1, col_diag2 = st.columns(2)
+        
+        with col_diag1:
+            st.write("**File Status:**")
+            st.write(f"- `.env.encrypted` exists: {'✅' if env_encrypted.exists() else '❌'}")
+            st.write(f"- `.env` exists: {'✅' if env_plain.exists() else '❌'}")
+            
+            # Check encryption key
+            has_key = False
+            try:
+                key = st.secrets.get("encryption_key", None)
+                has_key = key is not None and len(str(key)) > 0
+            except (AttributeError, FileNotFoundError, KeyError):
+                pass
+            st.write(f"- `encryption_key` in secrets: {'✅' if has_key else '❌'}")
+        
+        with col_diag2:
+            st.write("**Database URLs:**")
+            # Import get_env_var for checking
+            from queryhelper import get_env_var
+            fetch_url = os.getenv('fetch_query_url') or get_env_var('fetch_query_url')
+            cms_url = os.getenv('cms_url') or get_env_var('cms_url')
+            catalog_url = os.getenv('catalog_url') or get_env_var('catalog_url')
+            
+            # Mask URLs for security (show first few chars)
+            def mask_url(url):
+                if not url or url == 'Not set':
+                    return '❌ Not set'
+                if len(url) > 20:
+                    return f"✅ {url[:15]}...{url[-5:]}"
+                return f"✅ {url}"
+            
+            st.write(f"- `fetch_query_url`: {mask_url(fetch_url)}")
+            st.write(f"- `cms_url`: {mask_url(cms_url)}")
+            st.write(f"- `catalog_url`: {mask_url(catalog_url)}")
+            
+            # Check if any URLs are set
+            urls_set = sum(1 for url in [fetch_url, cms_url, catalog_url] if url and url != 'Not set')
+            st.write(f"\n**Summary:** {urls_set}/3 database URLs configured")
+        
+        st.info("💡 **Troubleshooting:**\n"
+                "1. Ensure `.env.encrypted` is in your repository\n"
+                "2. Add `encryption_key` to Streamlit Cloud secrets (Settings → Secrets)\n"
+                "3. Verify the encryption key matches the one used to encrypt the file\n"
+                "4. Check that your `.env` file contains `fetch_query_url` and `cms_url` before encryption")
+
 # Option pickers
 col1, col2, col3 = st.columns([1.2, 1, 1])
 
@@ -4175,8 +4236,7 @@ with col1:
     # Check if config is loaded successfully
     if cfg.empty or "domain" not in cfg.columns:
         st.error("⚠️ Configuration not loaded. Please check your database connection.")
-        st.info("💡 Ensure 'fetch_query_url' is set in Streamlit secrets or your encrypted .env file.")
-        st.info("💡 Also ensure 'cms_url' is set for initial configuration loading.")
+        st.info("💡 Expand the 'Connection Diagnostics' section above for detailed troubleshooting.")
         st.stop()
     
     all_domains = sorted([d for d in cfg["domain"].dropna().unique().tolist() if d])
