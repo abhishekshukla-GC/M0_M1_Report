@@ -4119,17 +4119,67 @@ def load_config_df() -> pd.DataFrame:
             st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
-        # Attempting to connect to database
-        steps.append("Step 2: Querying accounts table...")
-        a = fetch_query_results(
-            """
-            SELECT id account_id, primary_email_domain
-            FROM accounts
-            """
-        )
+        # Attempting to connect to database - first get current schema
+        steps.append("Step 2: Getting database and schema info...")
+        try:
+            db_info = fetch_query_results("SELECT current_database() as db_name, current_schema() as schema_name, current_schemas(false) as search_path")
+            if not db_info.empty:
+                db_name = db_info.iloc[0].get('db_name', 'Unknown')
+                schema_name = db_info.iloc[0].get('schema_name', 'Unknown')
+                steps.append(f"   Connected to database: `{db_name}`, current schema: `{schema_name}`")
+        except:
+            steps.append("   Could not get database info")
+        
+        # Try to find accounts table in different schemas
+        steps.append("Step 3: Searching for accounts table...")
+        try:
+            table_search = fetch_query_results("""
+                SELECT table_schema, table_name
+                FROM information_schema.tables
+                WHERE table_name = 'accounts'
+                AND table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                ORDER BY table_schema
+            """)
+            if not table_search.empty:
+                schemas = table_search['table_schema'].unique().tolist()
+                steps.append(f"   Found `accounts` table in schema(s): {', '.join(schemas)}")
+            else:
+                steps.append("   ⚠️ `accounts` table not found in information_schema (may be in a different schema or have permission issues)")
+        except Exception as search_error:
+            steps.append(f"   ⚠️ Could not search for table: {str(search_error)}")
+        
+        # Attempting to query accounts table
+        steps.append("Step 4: Querying accounts table...")
+        a = None
+        try:
+            a = fetch_query_results(
+                """
+                SELECT id account_id, primary_email_domain
+                FROM accounts
+                """
+            )
+        except Exception as query_error:
+            steps.append(f"   ❌ Query failed: {str(query_error)}")
+            # Try with public schema explicitly
+            try:
+                steps.append("   Trying with explicit schema: public.accounts...")
+                a = fetch_query_results(
+                    """
+                    SELECT id account_id, primary_email_domain
+                    FROM public.accounts
+                    """
+                )
+                steps.append("   ✅ Query with public schema succeeded")
+            except:
+                pass
+        
         # Check if None or empty
         if a is None or a.empty:
-            steps.append("❌ Query returned no accounts (table may be empty or query failed)")
+            steps.append("❌ Query returned no accounts (table may be empty, in different schema, or query failed)")
+            steps.append("💡 **Possible solutions:**")
+            steps.append("   - Check if you're connected to the correct database")
+            steps.append("   - Verify the table exists and has data")
+            steps.append("   - Try specifying schema explicitly (e.g., `schema.accounts`)")
             st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
@@ -4137,7 +4187,7 @@ def load_config_df() -> pd.DataFrame:
         # Found accounts
         a["domain"] = a["primary_email_domain"].str.split(".").str[0]
 
-        steps.append("Step 3: Querying configs table...")
+        steps.append("Step 5: Querying configs table...")
         cfg = fetch_query_results(
             """
             SELECT workspace_id, account_id, config->>'model_name' AS db_name
@@ -4157,7 +4207,7 @@ def load_config_df() -> pd.DataFrame:
         cfg['build_blinkit']=True
         cfg['build_instamart']=True
         cfg['build_zepto']=True
-        steps.append("✅ Successfully merged and loaded configuration")
+        steps.append("Step 6: ✅ Successfully merged and loaded configuration")
         st.session_state.config_load_steps = steps
         # Successfully loaded configurations
         return cfg
