@@ -4144,6 +4144,7 @@ def load_config_df() -> pd.DataFrame:
         
         # Try to find accounts table in different schemas
         steps.append("Step 4: Searching for accounts table...")
+        found_schemas = []
         try:
             table_search = fetch_query_results("""
                 SELECT table_schema, table_name
@@ -4153,37 +4154,81 @@ def load_config_df() -> pd.DataFrame:
                 ORDER BY table_schema
             """)
             if not table_search.empty:
-                schemas = table_search['table_schema'].unique().tolist()
-                steps.append(f"   Found `accounts` table in schema(s): {', '.join(schemas)}")
+                found_schemas = table_search['table_schema'].unique().tolist()
+                steps.append(f"   ✅ Found `accounts` table in schema(s): {', '.join(found_schemas)}")
             else:
-                steps.append("   ⚠️ `accounts` table not found in information_schema (may be in a different schema or have permission issues)")
+                steps.append("   ⚠️ `accounts` table not found in information_schema")
+                # Try to list all available schemas
+                try:
+                    all_schemas = fetch_query_results("""
+                        SELECT schema_name 
+                        FROM information_schema.schemata
+                        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast', 'pg_temp_1', 'pg_toast_temp_1')
+                        ORDER BY schema_name
+                    """)
+                    if not all_schemas.empty:
+                        schema_list = all_schemas['schema_name'].unique().tolist()
+                        steps.append(f"   Available schemas: {', '.join(schema_list[:10])}{'...' if len(schema_list) > 10 else ''}")
+                except:
+                    pass
+                
+                # List some tables that DO exist to help debug
+                try:
+                    existing_tables = fetch_query_results("""
+                        SELECT table_schema, table_name
+                        FROM information_schema.tables
+                        WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                        ORDER BY table_schema, table_name
+                        LIMIT 20
+                    """)
+                    if not existing_tables.empty:
+                        steps.append(f"   Sample tables found: {len(existing_tables)} tables (showing first 20)")
+                        # Group by schema
+                        for schema in existing_tables['table_schema'].unique()[:5]:
+                            tables_in_schema = existing_tables[existing_tables['table_schema'] == schema]['table_name'].tolist()
+                            steps.append(f"     - Schema `{schema}`: {', '.join(tables_in_schema[:5])}{'...' if len(tables_in_schema) > 5 else ''}")
+                except:
+                    pass
         except Exception as search_error:
             steps.append(f"   ⚠️ Could not search for table: {str(search_error)}")
         
-        # Attempting to query accounts table
+        # Attempting to query accounts table - try multiple schemas
         steps.append("Step 5: Querying accounts table...")
         a = None
-        try:
-            a = fetch_query_results(
-                """
-                SELECT id account_id, primary_email_domain
-                FROM accounts
-                """
-            )
-        except Exception as query_error:
-            steps.append(f"   ❌ Query failed: {str(query_error)}")
-            # Try with public schema explicitly
+        schemas_to_try = found_schemas if found_schemas else ['public']  # Try found schemas first, then public
+        
+        for schema in schemas_to_try:
             try:
-                steps.append("   Trying with explicit schema: public.accounts...")
+                schema_name = schema if schema else 'public'
+                steps.append(f"   Trying schema: `{schema_name}`...")
+                a = fetch_query_results(
+                    f"""
+                    SELECT id account_id, primary_email_domain
+                    FROM {schema_name}.accounts
+                    """
+                )
+                if a is not None and not a.empty:
+                    steps.append(f"   ✅ Query succeeded with schema `{schema_name}`!")
+                    break
+                else:
+                    steps.append(f"   ⚠️ Query executed but returned no rows from `{schema_name}.accounts`")
+            except Exception as schema_error:
+                steps.append(f"   ❌ Query failed for `{schema_name}.accounts`: {str(schema_error)[:100]}")
+        
+        # If still no results, try without schema (default search path)
+        if a is None or a.empty:
+            try:
+                steps.append("   Trying without explicit schema (using search path)...")
                 a = fetch_query_results(
                     """
                     SELECT id account_id, primary_email_domain
-                    FROM public.accounts
+                    FROM accounts
                     """
                 )
-                steps.append("   ✅ Query with public schema succeeded")
-            except:
-                pass
+                if a is not None and not a.empty:
+                    steps.append("   ✅ Query succeeded without explicit schema!")
+            except Exception as default_error:
+                steps.append(f"   ❌ Default query also failed: {str(default_error)[:100]}")
         
         # Check if None or empty
         if a is None or a.empty:
@@ -4261,65 +4306,6 @@ cfg = load_config_df()
 # Diagnostic section (only show if config failed to load)
 if cfg.empty or "domain" not in cfg.columns:
     with st.expander("🔍 Connection Diagnostics", expanded=True):
-        st.subheader("Environment & Credentials Status")
-        
-        # Check encrypted files
-        from pathlib import Path
-        env_encrypted = Path(".env.encrypted")
-        env_plain = Path(".env")
-        
-        col_diag1, col_diag2 = st.columns(2)
-        
-        with col_diag1:
-            st.write("**File Status:**")
-            st.write(f"- `.env.encrypted` exists: {'✅' if env_encrypted.exists() else '❌ (Required!)'}")
-            st.write(f"- `.env` exists: {'✅' if env_plain.exists() else '⚠️ (Expected - not in repo)'}")
-            st.caption("Note: `.env` not existing is normal - we use `.env.encrypted` instead")
-            
-            # Check encryption key
-            has_key = False
-            key_value = None
-            try:
-                key_value = st.secrets.get("encryption_key", None)
-                has_key = key_value is not None and len(str(key_value)) > 0
-            except (AttributeError, FileNotFoundError, KeyError):
-                pass
-            st.write(f"- `encryption_key` in secrets: {'✅' if has_key else '❌ (Required!)'}")
-            
-            # Check if decryption worked by checking if env vars are loaded
-            if env_encrypted.exists() and has_key:
-                # Try to verify decryption worked
-                test_vars = ['fetch_query_url', 'cms_url', 'SNOWFLAKE_ACCOUNT']
-                loaded_count = sum(1 for var in test_vars if os.getenv(var))
-                st.write(f"- Environment variables loaded: {loaded_count}/{len(test_vars)}")
-                if loaded_count == 0:
-                    st.error("⚠️ Decryption may have failed - no environment variables found!")
-                    st.caption("Check encryption key matches the one used to encrypt")
-        
-        with col_diag2:
-            st.write("**Database URLs:**")
-            # Import get_env_var for checking
-            from queryhelper import get_env_var
-            fetch_url = os.getenv('fetch_query_url') or get_env_var('fetch_query_url')
-            cms_url = os.getenv('cms_url') or get_env_var('cms_url')
-            catalog_url = os.getenv('catalog_url') or get_env_var('catalog_url')
-            
-            # Mask URLs for security (show first few chars)
-            def mask_url(url):
-                if not url or url == 'Not set':
-                    return '❌ Not set'
-                if len(url) > 20:
-                    return f"✅ {url[:15]}...{url[-5:]}"
-                return f"✅ {url}"
-            
-            st.write(f"- `fetch_query_url`: {mask_url(fetch_url)}")
-            st.write(f"- `cms_url`: {mask_url(cms_url)}")
-            st.write(f"- `catalog_url`: {mask_url(catalog_url)}")
-            
-            # Check if any URLs are set
-            urls_set = sum(1 for url in [fetch_url, cms_url, catalog_url] if url and url != 'Not set')
-            st.write(f"\n**Summary:** {urls_set}/3 database URLs configured")
-        
         # Test database connection
         st.subheader("Database Connection Test")
         test_button = st.button("🔍 Test Database Connection", type="primary")
