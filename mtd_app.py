@@ -4187,6 +4187,30 @@ def load_config_df() -> pd.DataFrame:
                         for schema in existing_tables['table_schema'].unique()[:5]:
                             tables_in_schema = existing_tables[existing_tables['table_schema'] == schema]['table_name'].tolist()
                             steps.append(f"     - Schema `{schema}`: {', '.join(tables_in_schema[:5])}{'...' if len(tables_in_schema) > 5 else ''}")
+                    
+                    # Check if accounts table exists but is empty
+                    try:
+                        accounts_check = fetch_query_results("""
+                            SELECT COUNT(*) as row_count 
+                            FROM public.accounts
+                        """)
+                        if not accounts_check.empty:
+                            row_count = accounts_check.iloc[0].get('row_count', 0)
+                            steps.append(f"   ⚠️ `public.accounts` table EXISTS but has {row_count} rows (empty)")
+                    except:
+                        pass
+                    
+                    # Check configs table too
+                    try:
+                        configs_check = fetch_query_results("""
+                            SELECT COUNT(*) as row_count 
+                            FROM public.configs
+                        """)
+                        if not configs_check.empty:
+                            row_count = configs_check.iloc[0].get('row_count', 0)
+                            steps.append(f"   ⚠️ `public.configs` table EXISTS but has {row_count} rows")
+                    except:
+                        pass
                 except:
                     pass
         except Exception as search_error:
@@ -4232,11 +4256,24 @@ def load_config_df() -> pd.DataFrame:
         
         # Check if None or empty
         if a is None or a.empty:
-            steps.append("❌ Query returned no accounts (table may be empty, in different schema, or query failed)")
-            steps.append("💡 **Possible solutions:**")
-            steps.append("   - Check if you're connected to the correct database")
-            steps.append("   - Verify the table exists and has data")
-            steps.append("   - Try specifying schema explicitly (e.g., `schema.accounts`)")
+            steps.append("❌ Query returned no accounts")
+            steps.append("")
+            steps.append("💡 **Root Cause:** The `accounts` table exists but is EMPTY (0 rows)")
+            steps.append("")
+            steps.append("**This means:**")
+            steps.append("   - ✅ Connection to database works")
+            steps.append("   - ✅ Table exists in the database")
+            steps.append("   - ❌ Table has no data")
+            steps.append("")
+            steps.append("**Why it works locally but not on cloud:**")
+            steps.append("   - Your local `.env` likely points to a DIFFERENT database")
+            steps.append("   - OR your local database has data, but cloud database is empty")
+            steps.append("")
+            steps.append("**Solution:**")
+            steps.append("   1. Check your local `.env` file - what database name does `fetch_query_url` use?")
+            steps.append("   2. Compare with cloud: Database name from URL shows `gobblecube`")
+            steps.append("   3. If different, re-encrypt your local `.env` (the one that works) to create new `.env.encrypted`")
+            steps.append("   4. OR ensure the `gobblecube` database has the `accounts` and `configs` tables populated")
             st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
