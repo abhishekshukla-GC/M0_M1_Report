@@ -4103,15 +4103,24 @@ def df_to_mapping(df: pd.DataFrame) -> Dict[str, str]:
 @st.cache_data(show_spinner=True, ttl=3600)  # Cache for 1 hour, show spinner
 def load_config_df() -> pd.DataFrame:
     """Load configuration from database. Returns empty DataFrame on failure."""
+    # Clear previous error
+    if 'config_load_error' in st.session_state:
+        del st.session_state.config_load_error
+    if 'config_load_steps' in st.session_state:
+        del st.session_state.config_load_steps
+    
+    steps = []
     try:
         # Check if database URL is configured (check both env vars and Streamlit secrets)
         from queryhelper import get_env_var
         db_url = get_env_var('fetch_query_url') or os.getenv('fetch_query_url')
+        steps.append(f"Step 1: Checking fetch_query_url... {'✅ Found' if db_url else '❌ Not found'}")
         if not db_url:
-            # fetch_query_url not found - will be shown in diagnostics
+            st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
         # Attempting to connect to database
+        steps.append("Step 2: Querying accounts table...")
         a = fetch_query_results(
             """
             SELECT id account_id, primary_email_domain
@@ -4120,12 +4129,15 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if a is None or a.empty:
-            # Query returned no accounts - will be shown in diagnostics
+            steps.append("❌ Query returned no accounts (table may be empty or query failed)")
+            st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
+        steps.append(f"✅ Found {len(a)} account(s)")
         # Found accounts
         a["domain"] = a["primary_email_domain"].str.split(".").str[0]
 
+        steps.append("Step 3: Querying configs table...")
         cfg = fetch_query_results(
             """
             SELECT workspace_id, account_id, config->>'model_name' AS db_name
@@ -4135,21 +4147,27 @@ def load_config_df() -> pd.DataFrame:
         )
         # Check if None or empty
         if cfg is None or cfg.empty:
-            # Query returned no configurations - will be shown in diagnostics
+            steps.append("❌ Query returned no configurations (table may be empty or query failed)")
+            st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
+        steps.append(f"✅ Found {len(cfg)} configuration(s)")
         # Found configurations
         cfg = cfg.merge(a, on="account_id", how="left")
         cfg['build_blinkit']=True
         cfg['build_instamart']=True
         cfg['build_zepto']=True
+        steps.append("✅ Successfully merged and loaded configuration")
+        st.session_state.config_load_steps = steps
         # Successfully loaded configurations
         return cfg
     except Exception as e:
         # Configuration load error - will be shown in UI diagnostics
-        # Store error in session state for diagnostics to display
-        if 'config_load_error' not in st.session_state:
-            st.session_state.config_load_error = str(e)
+        steps.append(f"❌ Exception occurred: {str(e)}")
+        st.session_state.config_load_error = str(e)
+        st.session_state.config_load_steps = steps
+        import traceback
+        st.session_state.config_load_traceback = traceback.format_exc()
         return pd.DataFrame()
 
 
@@ -4259,24 +4277,51 @@ if cfg.empty or "domain" not in cfg.columns:
                 else:
                     test_status.success("✅ Basic connection test passed!")
                 
-                # Test 2: Check if accounts table exists
+                # Test 2: Check if accounts table exists (check all schemas)
                 try:
+                    # First, try to find the table in any schema
                     accounts_check = fetch_query_results("""
-                        SELECT COUNT(*) as count 
-                        FROM information_schema.tables 
+                        SELECT table_schema, table_name, 
+                               (SELECT COUNT(*) FROM information_schema.columns 
+                                WHERE table_schema = t.table_schema 
+                                AND table_name = t.table_name) as column_count
+                        FROM information_schema.tables t
                         WHERE table_name = 'accounts'
+                        AND table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                        ORDER BY table_schema
                     """)
-                    if not accounts_check.empty and accounts_check.iloc[0]['count'] > 0:
-                        # Table exists, check row count
-                        row_count = fetch_query_results("SELECT COUNT(*) as count FROM accounts")
-                        if not row_count.empty:
-                            count = row_count.iloc[0]['count']
-                            if count > 0:
-                                test_status.success(f"✅ `accounts` table exists with {count} row(s)")
+                    
+                    if not accounts_check.empty:
+                        # Table exists in at least one schema
+                        schemas = accounts_check['table_schema'].unique().tolist()
+                        schema_info = f"Found in schema(s): {', '.join(schemas)}"
+                        
+                        # Try to get row count (will use default schema or search path)
+                        try:
+                            row_count = fetch_query_results("SELECT COUNT(*) as count FROM accounts")
+                            if not row_count.empty:
+                                count = int(row_count.iloc[0]['count']) if 'count' in row_count.columns else 0
+                                if count > 0:
+                                    test_status.success(f"✅ `accounts` table exists ({schema_info}) with {count} row(s)")
+                                else:
+                                    test_status.warning(f"⚠️ `accounts` table exists ({schema_info}) but is empty")
                             else:
-                                test_status.warning("⚠️ `accounts` table exists but is empty")
+                                test_status.warning(f"⚠️ `accounts` table exists ({schema_info}) but could not get row count")
+                        except Exception as count_error:
+                            test_status.warning(f"⚠️ `accounts` table exists ({schema_info}) but query failed: {str(count_error)}")
                     else:
-                        test_status.error("❌ `accounts` table does not exist in the database")
+                        # Table not found in information_schema, but let's try querying it anyway
+                        # (it might exist but not be visible in information_schema due to permissions)
+                        test_status.info("ℹ️ `accounts` table not found in information_schema, but will try querying it directly...")
+                        try:
+                            row_count = fetch_query_results("SELECT COUNT(*) as count FROM accounts")
+                            if not row_count.empty:
+                                count = int(row_count.iloc[0]['count']) if 'count' in row_count.columns else 0
+                                test_status.success(f"✅ `accounts` table exists (accessible via query) with {count} row(s)")
+                            else:
+                                test_status.warning("⚠️ Could query `accounts` table but got no row count")
+                        except Exception as direct_query_error:
+                            test_status.error(f"❌ `accounts` table does not exist or is not accessible: {str(direct_query_error)}")
                 except Exception as table_error:
                     test_status.warning(f"⚠️ Could not check accounts table: {str(table_error)}")
                 
@@ -4345,9 +4390,18 @@ if cfg.empty or "domain" not in cfg.columns:
                 test_status.error(f"❌ `fetch_query_url` connection failed: {str(e)}")
                 st.exception(e)
         
-        # Show configuration load error if available
+        # Show configuration load steps and errors
+        if 'config_load_steps' in st.session_state:
+            st.subheader("Configuration Load Steps")
+            with st.expander("View detailed steps", expanded=True):
+                for step in st.session_state.config_load_steps:
+                    st.write(step)
+        
         if 'config_load_error' in st.session_state:
             st.error(f"**Configuration Load Error:** {st.session_state.config_load_error}")
+            if 'config_load_traceback' in st.session_state:
+                with st.expander("View full error traceback"):
+                    st.code(st.session_state.config_load_traceback)
         
         st.info("💡 **Troubleshooting:**\n"
                 "1. Ensure `.env.encrypted` is in your repository\n"
