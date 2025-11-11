@@ -4120,7 +4120,7 @@ def load_config_df() -> pd.DataFrame:
             return pd.DataFrame()
         
         # Show connection URL (masked for security)
-        from urllib.parse import urlparse
+        from urllib.parse import urlparse, parse_qs
         try:
             parsed = urlparse(db_url)
             # Mask sensitive parts but show database name
@@ -4128,6 +4128,14 @@ def load_config_df() -> pd.DataFrame:
             masked_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 'default'}/{db_name_from_url}"
             steps.append(f"Step 2: Connection URL: `{masked_url}` (masked)")
             steps.append(f"   Database name from URL: `{db_name_from_url}`")
+            steps.append(f"   Username: `{parsed.username if parsed.username else 'N/A'}`")
+            # Show query parameters (might affect connection behavior)
+            if parsed.query:
+                query_params = parse_qs(parsed.query)
+                important_params = ['sslmode', 'search_path', 'options']
+                found_params = {k: v for k, v in query_params.items() if k.lower() in important_params}
+                if found_params:
+                    steps.append(f"   Connection parameters: {found_params}")
         except Exception as parse_error:
             steps.append(f"Step 2: Connection URL configured (cannot parse: {str(parse_error)})")
         
@@ -4188,17 +4196,21 @@ def load_config_df() -> pd.DataFrame:
                             tables_in_schema = existing_tables[existing_tables['table_schema'] == schema]['table_name'].tolist()
                             steps.append(f"     - Schema `{schema}`: {', '.join(tables_in_schema[:5])}{'...' if len(tables_in_schema) > 5 else ''}")
                     
-                    # Check if accounts table exists but is empty
-                    try:
-                        accounts_check = fetch_query_results("""
-                            SELECT COUNT(*) as row_count 
-                            FROM public.accounts
-                        """)
-                        if not accounts_check.empty:
-                            row_count = accounts_check.iloc[0].get('row_count', 0)
-                            steps.append(f"   ⚠️ `public.accounts` table EXISTS but has {row_count} rows (empty)")
-                    except:
-                        pass
+                    # Check if accounts table exists but is empty - try multiple schemas
+                    for schema_name in ['public'] + (schema_list[:3] if 'schema_list' in locals() else []):
+                        try:
+                            accounts_check = fetch_query_results(f"""
+                                SELECT COUNT(*) as row_count 
+                                FROM {schema_name}.accounts
+                            """)
+                            if not accounts_check.empty:
+                                row_count = accounts_check.iloc[0].get('row_count', 0)
+                                if row_count > 0:
+                                    steps.append(f"   ✅ `{schema_name}.accounts` table EXISTS with {row_count} rows!")
+                                else:
+                                    steps.append(f"   ⚠️ `{schema_name}.accounts` table EXISTS but has {row_count} rows (empty)")
+                        except Exception as e:
+                            steps.append(f"   ❌ Could not check `{schema_name}.accounts`: {str(e)[:50]}")
                     
                     # Check configs table too
                     try:
@@ -4256,24 +4268,31 @@ def load_config_df() -> pd.DataFrame:
         
         # Check if None or empty
         if a is None or a.empty:
+            steps.append("")
             steps.append("❌ Query returned no accounts")
             steps.append("")
-            steps.append("💡 **Root Cause:** The `accounts` table exists but is EMPTY (0 rows)")
+            steps.append("💡 **Root Cause Analysis:**")
             steps.append("")
-            steps.append("**This means:**")
-            steps.append("   - ✅ Connection to database works")
-            steps.append("   - ✅ Table exists in the database")
-            steps.append("   - ❌ Table has no data")
+            steps.append("**What we know:**")
+            steps.append("   - ✅ Connection to database works (basic queries succeed)")
+            steps.append("   - ✅ Table structure exists (query executes without error)")
+            steps.append("   - ❌ Table has 0 rows (empty)")
             steps.append("")
-            steps.append("**Why it works locally but not on cloud:**")
-            steps.append("   - Your local `.env` likely points to a DIFFERENT database")
-            steps.append("   - OR your local database has data, but cloud database is empty")
+            steps.append("**Local vs Cloud:**")
+            steps.append("   - Local: `gobblecube` database has 578 rows in `accounts` table")
+            steps.append("   - Cloud: `gobblecube` database has 0 rows in `accounts` table")
             steps.append("")
-            steps.append("**Solution:**")
-            steps.append("   1. Check your local `.env` file - what database name does `fetch_query_url` use?")
-            steps.append("   2. Compare with cloud: Database name from URL shows `gobblecube`")
-            steps.append("   3. If different, re-encrypt your local `.env` (the one that works) to create new `.env.encrypted`")
-            steps.append("   4. OR ensure the `gobblecube` database has the `accounts` and `configs` tables populated")
+            steps.append("**Possible explanations:**")
+            steps.append("   1. 🔴 **Different database instances** - Same name, different servers/data")
+            steps.append("   2. 🔴 **Connection URL differences** - Check for SSL, search_path, or other params")
+            steps.append("   3. 🔴 **User permissions** - Cloud user might see different data (row-level security)")
+            steps.append("   4. 🔴 **Schema differences** - Data might be in a different schema")
+            steps.append("")
+            steps.append("**Immediate Action:**")
+            steps.append("   1. Verify you pushed the NEW `.env.encrypted` file (from re-encryption)")
+            steps.append("   2. Verify the encryption key in Streamlit Cloud secrets matches the new key")
+            steps.append("   3. Check if your local connection URL has any special parameters (SSL, search_path, etc.)")
+            steps.append("   4. Compare the FULL connection URLs (host, port, database, username, params)")
             st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
