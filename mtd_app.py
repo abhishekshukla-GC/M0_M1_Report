@@ -4119,8 +4119,20 @@ def load_config_df() -> pd.DataFrame:
             st.session_state.config_load_steps = steps
             return pd.DataFrame()
         
+        # Show connection URL (masked for security)
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(db_url)
+            # Mask sensitive parts but show database name
+            db_name_from_url = parsed.path.split('/')[-1] if parsed.path else 'unknown'
+            masked_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 'default'}/{db_name_from_url}"
+            steps.append(f"Step 2: Connection URL: `{masked_url}` (masked)")
+            steps.append(f"   Database name from URL: `{db_name_from_url}`")
+        except Exception as parse_error:
+            steps.append(f"Step 2: Connection URL configured (cannot parse: {str(parse_error)})")
+        
         # Attempting to connect to database - first get current schema
-        steps.append("Step 2: Getting database and schema info...")
+        steps.append("Step 3: Getting database and schema info...")
         try:
             db_info = fetch_query_results("SELECT current_database() as db_name, current_schema() as schema_name, current_schemas(false) as search_path")
             if not db_info.empty:
@@ -4131,7 +4143,7 @@ def load_config_df() -> pd.DataFrame:
             steps.append("   Could not get database info")
         
         # Try to find accounts table in different schemas
-        steps.append("Step 3: Searching for accounts table...")
+        steps.append("Step 4: Searching for accounts table...")
         try:
             table_search = fetch_query_results("""
                 SELECT table_schema, table_name
@@ -4149,7 +4161,7 @@ def load_config_df() -> pd.DataFrame:
             steps.append(f"   ⚠️ Could not search for table: {str(search_error)}")
         
         # Attempting to query accounts table
-        steps.append("Step 4: Querying accounts table...")
+        steps.append("Step 5: Querying accounts table...")
         a = None
         try:
             a = fetch_query_results(
@@ -4187,7 +4199,7 @@ def load_config_df() -> pd.DataFrame:
         # Found accounts
         a["domain"] = a["primary_email_domain"].str.split(".").str[0]
 
-        steps.append("Step 5: Querying configs table...")
+        steps.append("Step 6: Querying configs table...")
         cfg = fetch_query_results(
             """
             SELECT workspace_id, account_id, config->>'model_name' AS db_name
@@ -4207,7 +4219,7 @@ def load_config_df() -> pd.DataFrame:
         cfg['build_blinkit']=True
         cfg['build_instamart']=True
         cfg['build_zepto']=True
-        steps.append("Step 6: ✅ Successfully merged and loaded configuration")
+        steps.append("Step 7: ✅ Successfully merged and loaded configuration")
         st.session_state.config_load_steps = steps
         # Successfully loaded configurations
         return cfg
@@ -4446,6 +4458,11 @@ if cfg.empty or "domain" not in cfg.columns:
             with st.expander("View detailed steps", expanded=True):
                 for step in st.session_state.config_load_steps:
                     st.write(step)
+                
+                # Show database comparison if available
+                if 'connected_db' in st.session_state:
+                    st.info(f"💡 **Connected Database:** `{st.session_state.connected_db}` (Schema: `{st.session_state.connected_schema}`)\n\n"
+                           f"Compare this with your local database name. If they're different, your connection URL might be pointing to a different database.")
         
         if 'config_load_error' in st.session_state:
             st.error(f"**Configuration Load Error:** {st.session_state.config_load_error}")
